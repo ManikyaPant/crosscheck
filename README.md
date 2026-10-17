@@ -1,6 +1,6 @@
 # CrossCheck demo
 
-Compare two statements across languages using Sarvam Saaras v4 and Sarvam-105B. Record or upload audio (up to 30 seconds and 12 MB per statement), or type statements. Results include highlighted conflict quotes, clarification questions, agreements, and one-sided details. Transcripts can be corrected and compared again.
+Compare two statements across languages using Sarvam Saaras v4 and Sarvam-105B. Record or upload audio (up to 30 seconds and 2 MB per statement), or type statements. Results include highlighted conflict quotes, clarification questions, agreements, and one-sided details. Transcripts can be corrected and compared again.
 
 ## Run the demo
 
@@ -49,3 +49,7 @@ Sign in to GitHub when prompted. If Git asks for your author identity, set your 
 This is a demo. The API key stays on the server. The app processes audio in memory, forwards it to Sarvam, and keeps transcripts in browser memory while the page is open. It does not implement persistent history or accounts. Model confidence is an estimate. Audio is limited to the synchronous API; trim longer clips or use Sarvam Batch separately.
 
 Basic local checks only; no claim of full accuracy evaluation or comprehensive browser testing.
+
+## Vercel
+
+Deploy the `crosscheck` directory using the Next.js framework. The included `vercel.json` selects `npm run build:vercel`. Configure `SARVAM_API_KEY` as a server-side production environment variable in Vercel. Never use a `NEXT_PUBLIC_` prefix. Audio uploads are limited to 2 MB per clip so the pair fits Vercel's request-size limit.

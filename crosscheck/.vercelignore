@@ -1,0 +1,9 @@
+.env*
+.dev.vars*
+.sites-runtime
+.wrangler
+node_modules
+.next
+dist
+outputs
+work

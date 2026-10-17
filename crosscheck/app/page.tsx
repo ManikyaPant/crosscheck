@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, CheckCheck, Copy, FileAudio, Globe2, Mic, Plus, RotateCcw, ShieldCheck, Square, Upload, X } from "lucide-react";
@@ -55,7 +55,7 @@ function Capture({ side, value, disabled, consent, change, error, recordingChang
   async function upload(file?: File) {
     if (!file) return;
     if (!/\.(wav|mp3|m4a|mp4|webm|ogg|oga|opus|flac|aac|aiff|aif|amr|wma)$/i.test(file.name)) { error("Please choose a supported audio file, such as WAV, MP3, M4A, WebM or OGG."); return; }
-    if (!file.size || file.size > 12 * 1024 * 1024) { error("Choose a non-empty audio file of 12 MB or less."); return; }
+    if (!file.size || file.size > 2 * 1024 * 1024) { error("Choose a non-empty audio file of 2 MB or less."); return; }
     const url = URL.createObjectURL(file);
     const audio = new Audio(url);
     try {
@@ -78,7 +78,7 @@ function Capture({ side, value, disabled, consent, change, error, recordingChang
     <label className="text-label" htmlFor={`text-${side}`}>{value.file ? "Transcript appears after comparison" : "Or type a statement"}<span>{value.original.length}/12,000</span></label>
     <textarea id={`text-${side}`} placeholder={side === "a" ? "What did the first person say?" : "What did the other person say?"} value={value.original} maxLength={12000} disabled={disabled || Boolean(value.file)} onChange={e => change({original:e.target.value,english:""})}/>
     {value.english && value.english !== value.original && <label className="translation">English translation<textarea aria-label={`English translation of statement ${side}`} value={value.english} disabled={disabled} maxLength={12000} onChange={e => change({english:e.target.value})}/></label>}
-    <div className="card-footer"><span><Globe2 size={13}/> Any supported language</span><span>30 sec max · 12 MB</span></div>
+    <div className="card-footer"><span><Globe2 size={13}/> Any supported language</span><span>30 sec max · 2 MB</span></div>
   </article>;
 }
 export default function Home() {

@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { createSarvam, ApiError } from './sarvam.mjs';
 import { textInputSchema, statementSchema } from './schema.mjs';
 
-export const MAX_FILE_BYTES = 12 * 1024 * 1024;
+// Two files plus form fields stay below Vercel's 4.5 MB request limit.
+export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const audioExtensions = /\.(wav|mp3|m4a|mp4|webm|ogg|oga|opus|flac|aac|aiff|aif|amr|wma)$/i;
 export function validateAudio(file) {
   if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function' || !file.size) throw new ApiError('Add an audio file for both statements.', 400, 'missing_audio');
-  if (file.size > MAX_FILE_BYTES) throw new ApiError('Each audio file must be 12 MB or smaller.', 413, 'file_too_large');
+  if (file.size > MAX_FILE_BYTES) throw new ApiError('Each audio file must be 2 MB or smaller.', 413, 'file_too_large');
   if (!audioExtensions.test(file.name || '')) throw new ApiError('Use a WAV, MP3, M4A, WebM, OGG, OPUS, FLAC, AAC, AIFF, AMR or WMA audio file.', 415, 'invalid_audio_type');
 }
 export function todayIndia() {
@@ -22,7 +23,7 @@ export async function handleCompare(request, key, options = {}) {
   const fail = error => { const {status, ...body} = publicError(error); return Response.json(body, {status, headers: {'Cache-Control':'no-store'}}); };
   if (!key) return fail(new ApiError('Live comparison needs a server-side SARVAM_API_KEY. You can explore the sample comparisons meanwhile.', 503, 'key_not_configured'));
   const contentLength = Number(request.headers.get('content-length'));
-  if (contentLength > 2 * MAX_FILE_BYTES + 100000) return fail(new ApiError('Upload size exceeds the 24 MB total limit.', 413, 'file_too_large'));
+  if (contentLength > 2 * MAX_FILE_BYTES + 100000) return fail(new ApiError('Upload size exceeds the 4 MB total limit.', 413, 'file_too_large'));
   let input, files;
   try {
     const type = request.headers.get('content-type') || '';
