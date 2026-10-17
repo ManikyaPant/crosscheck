@@ -68,3 +68,27 @@ test('an upstream timeout does not start duplicate model generations', async () 
   await assert.rejects(client.compare(statement, statement, '', '2026-10-17'), error => error.code === 'upstream_timeout');
   assert.equal(requests, 1);
 });
+
+test('browser recording codec labels are normalized without changing audio bytes', async () => {
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  for (const [type, expected, name] of [
+    ['audio/webm;codecs=opus', 'audio/webm', 'recording.webm'],
+    ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'recording.m4a'],
+    ['', 'application/octet-stream', 'recording.wav'],
+  ]) {
+    let calls = 0;
+    const file = new File([bytes], name, { type });
+    const client = createSarvam('unit-test-only', { fetchImpl: async (_url, options) => {
+      const uploaded = options.body.get('file');
+      assert.equal(uploaded.type, expected);
+      assert.equal(uploaded.name, name);
+      assert.deepEqual(new Uint8Array(await uploaded.arrayBuffer()), bytes);
+      calls++;
+      return Response.json({ transcript: calls === 1 ? 'मीटिंग दो बजे है।' : 'The meeting is at two.', language_code: 'hi-IN' });
+    } });
+    const statement = await client.transcribe(file, 'unknown');
+    assert.equal(statement.english, 'The meeting is at two.');
+    assert.equal(calls, 2, 'Both transcription and translation must receive the normalized MIME type.');
+    assert.equal(file.type, type, 'The original recording stays unchanged.');
+  }
+});

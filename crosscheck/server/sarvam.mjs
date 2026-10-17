@@ -36,8 +36,12 @@ export function createSarvam(key, { fetchImpl = fetch, sleepImpl = sleep, timeou
     }
   }
   async function transcribe(file, language, progress = () => {}, signal) {
+    // MediaRecorder includes codec parameters (for example audio/webm;codecs=opus).
+    // Sarvam accepts the container MIME type only. Keep the original audio bytes.
+    const mimeType = (file.type || 'application/octet-stream').split(';')[0].trim().toLowerCase();
+    const audio = file.slice(0, file.size, mimeType);
     const call = mode => request('/speech-to-text', () => {
-      const form = new FormData(); form.append('file', file, file.name);
+      const form = new FormData(); form.append('file', audio, file.name);
       form.append('model', 'saaras:v4'); form.append('mode', mode); form.append('language_code', language || 'unknown');
       return form;
     }, false, signal);
