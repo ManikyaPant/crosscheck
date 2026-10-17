@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, CheckCheck, Copy, FileAudio, Globe2, Mic, Plus, RotateCcw, ShieldCheck, Square, Upload, X } from "lucide-react";
 import type { Comparison, Statement } from "../lib/types";
+import { readComparisonStream } from "../lib/compare-stream.mjs";
 
 type Input = Statement & { file: File | null; url: string };
 const empty = (): Input => ({ original: "", english: "", language: "unknown", file: null, url: "" });
@@ -87,8 +88,12 @@ export default function Home() {
   const [busy,setBusy] = useState(false); const [recording,setRecording] = useState(false);
   const [result,setResult] = useState<Comparison|null>(null); const [error,setError] = useState("");
   const [progress,setProgress] = useState(""); const [configured,setConfigured] = useState<boolean|null>(null);
+  const [elapsed,setElapsed] = useState(0);
+  const activeRequest = useRef<AbortController|null>(null);
   const [copied,setCopied] = useState(""); const urls = useRef(new Set<string>());
   const resultRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (!busy) return; const timer=setInterval(()=>setElapsed(s=>s+1),1000); return ()=>clearInterval(timer); },[busy]);
+  useEffect(() => () => activeRequest.current?.abort(),[]);
   useEffect(() => { fetch("/api/health").then(r=>r.json() as Promise<{configured:boolean}>).then(d=>setConfigured(Boolean(d.configured))).catch(()=>setConfigured(false)); return () => { urls.current.forEach(url=>URL.revokeObjectURL(url)); }; },[]);
   function change(side:"a"|"b",next:Partial<Input>) {
     if (next.url) urls.current.add(next.url);
@@ -98,23 +103,31 @@ export default function Home() {
   function reset() { urls.current.forEach(url=>URL.revokeObjectURL(url)); urls.current.clear(); setInputs({a:empty(),b:empty()}); setResult(null); setError(""); setTopic(""); }
   function sample(index:number) { reset(); const ex=examples[index]; setInputs({a:{...empty(),original:ex.a,language:ex.language},b:{...empty(),original:ex.b,language:"en-IN"}}); }
   async function compare() {
-    setBusy(true); setError(""); setResult(null); setProgress("Preparing statements…");
+    setBusy(true); setElapsed(0); setError(""); setResult(null); setProgress("Preparing statements…");
+    const controller=new AbortController(); activeRequest.current=controller;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const hasAudio=Boolean(inputs.a.file || inputs.b.file); let body: BodyInit;
+      deadline=setTimeout(()=>controller.abort(new DOMException("Comparison timed out", "TimeoutError")),hasAudio?105000:55000);
       const headers:Record<string,string>={Accept:"application/x-ndjson"};
       const statement=(s:Input)=>({original:s.original,english:s.english,language:s.language});
       if (hasAudio) {const form=new FormData(); for(const side of ["a","b"] as const) { const s=inputs[side]; if(s.file)form.append(`audio_${side}`,s.file); else form.append(`text_${side}`,JSON.stringify(statement(s))); form.append(`language_${side}`,s.language); } form.append("topic",topic); form.append("consent",String(consent)); body=form;}
       else {headers["Content-Type"]="application/json";body=JSON.stringify({a:statement(inputs.a),b:statement(inputs.b),topic});}
-      const response=await fetch("/api/compare",{method:"POST",headers,body});
+      const response=await fetch("/api/compare",{method:"POST",headers,body,signal:controller.signal});
       if(!response.ok) {const data=await response.json() as {error?:string};throw new Error(data.error || "Comparison failed. Please try again.");}
-      const reader=response.body?.getReader(); if(!reader)throw new Error("The server returned an empty response.");
-      const decoder=new TextDecoder(); let buffer="", completed=false;
-      function event(line:string) {if(!line.trim())return;const e=JSON.parse(line);if(e.kind==="error")throw new Error(e.error);if(e.kind==="progress")setProgress(`${e.statement ? `Statement ${e.statement.toUpperCase()}: `:""}${e.stage}…`);if(e.kind==="transcript")setInputs(prev=>({...prev,[e.statement]:{...prev[e.statement as "a"|"b"],...e.data}}));if(e.kind==="result"){setResult(e.data);completed=true;setInputs(prev=>({a:{...prev.a,...e.data.statements.a,file:null},b:{...prev.b,...e.data.statements.b,file:null}}));}}
-      while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done});const lines=buffer.split("\n");buffer=lines.pop()||"";lines.forEach(event);if(done)break;}event(buffer);
-      if(!completed)throw new Error("The comparison was interrupted. Please try again.");
+      if(!response.body)throw new Error("The server returned an empty response.");
+      const data=await readComparisonStream(response.body,{signal:controller.signal,onEvent(e){
+        if(e.kind==="progress")setProgress(`${e.statement ? `Statement ${e.statement.toUpperCase()}: `:""}${e.stage}…`);
+        if(e.kind==="transcript")setInputs(prev=>({...prev,[e.statement]:{...prev[e.statement as "a"|"b"],...e.data}}));
+      }}) as Comparison;
+      setResult(data);
+      setInputs(prev=>({a:{...prev.a,...data.statements.a,file:null},b:{...prev.b,...data.statements.b,file:null}}));
       setTimeout(()=>resultRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),100);
-    } catch(e) {setError(e instanceof Error?e.message:"Comparison failed. Please try again.");}
-    finally {setBusy(false);setProgress("");}
+    } catch(e) {
+      if(controller.signal.aborted)setError(controller.signal.reason?.name==="TimeoutError"?"Sarvam is taking too long. The comparison has stopped; please try shorter statements.":"Comparison cancelled. You can edit the statements and try again.");
+      else setError(e instanceof Error?e.message:"Comparison failed. Please try again.");
+    }
+    finally {clearTimeout(deadline);activeRequest.current=null;setBusy(false);setProgress("");}
   }
   async function copy(id:string,text:string){try{await navigator.clipboard.writeText(text);setCopied(id);setTimeout(()=>setCopied(""),2000);}catch{setError("Clipboard access was blocked. Select the question and copy it manually.");}}
   const ready = [inputs.a,inputs.b].every(s=>s.file || s.original.trim());
@@ -128,7 +141,7 @@ export default function Home() {
         <div className="context"><label htmlFor="topic">A little context <span>(optional)</span></label><input id="topic" maxLength={500} disabled={busy||recording} placeholder="e.g. Tomorrow’s project meeting" value={topic} onChange={e=>{setTopic(e.target.value);setResult(null);}}/></div>
         <label className="consent"><input type="checkbox" checked={consent} disabled={busy||recording} onChange={e=>setConsent(e.target.checked)}/><span>I have consent to record these speakers and send their audio to Sarvam for processing.</span></label>
         {error&&<div className="error" role="alert">{error}</div>}
-        <div className="compare-row"><p>{busy?<span role="status">{progress}</span>:"We compare what was said, not who is right."}</p><button className="primary" disabled={!ready||busy||recording||(needsConsent&&!consent)} onClick={compare}>{busy?<><span className="spinner"/> Comparing…</>:<>{result?"Compare again":"Find the differences"}<ArrowRight size={17}/></>}</button></div>
+        <div className="compare-row"><p>{busy?<span role="status">{progress} {elapsed}s</span>:"We compare what was said, not who is right."}</p>{busy&&<button className="text-button" onClick={()=>activeRequest.current?.abort()}>Cancel comparison</button>}<button className="primary" disabled={!ready||busy||recording||(needsConsent&&!consent)} onClick={compare}>{busy?<><span className="spinner"/> Comparing…</>:<>{result?"Compare again":"Find the differences"}<ArrowRight size={17}/></>}</button></div>
       </section>
       {result&&<section className="results" ref={resultRef} aria-label="Comparison results"><div className="section-heading"><div><span className="step-number">02</span><h2>A clearer picture</h2></div><span className={`result-label ${result.degraded?"uncertain":""}`}>{result.degraded?"Review needed":`${result.conflicts.length} ${result.conflicts.length===1?"conflict":"conflicts"} found`}</span></div><p className="summary">{result.summary}</p>
         {!result.degraded&&<div className="evidence">{(["a","b"] as const).map(side=><div key={side}><span className="eyebrow">STATEMENT {side.toUpperCase()} · {result.statements[side].language}</span><p><Highlight text={result.statements[side].original} quotes={result.conflicts.map(c=>side==="a"?c.statement_a.quote:c.statement_b.quote)}/></p>{result.statements[side].english!==result.statements[side].original&&<small>{result.statements[side].english}</small>}</div>)}</div>}

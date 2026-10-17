@@ -50,7 +50,11 @@ export async function handleCompare(request, key, options = {}) {
   }
   const client = createSarvam(key, options);
   const abort = new AbortController();
-  request.signal.addEventListener('abort', () => abort.abort(), { once:true });
+  const cancel = () => abort.abort();
+  if (request.signal.aborted) cancel();
+  else request.signal.addEventListener('abort', cancel, { once:true });
+  const deadline = setTimeout(() => abort.abort(new ApiError('Sarvam is taking too long. Please try again with shorter statements.', 504, 'comparison_timeout')), files ? 90000 : 45000);
+  const cleanup = () => { clearTimeout(deadline); request.signal.removeEventListener('abort', cancel); files = undefined; };
   const run = async emit => {
     const entries = await Promise.all(['a','b'].map(async id => {
       const statement = files?.[id] ? await client.transcribe(files[id], input[id].language, stage => emit({kind:'progress', statement:id,stage}), abort.signal) : {...input[id], source:'text'};
@@ -71,13 +75,13 @@ export async function handleCompare(request, key, options = {}) {
         const emit = value => { if (!closed && !abort.signal.aborted) { try {controller.enqueue(encoder.encode(JSON.stringify(value)+'\n'));} catch {closed = true; abort.abort();} } };
         try { emit({kind:'progress',stage:'starting'}); emit({kind:'result',data:await run(emit)}); }
         catch(error) { abort.abort(); const body = publicError(error); if (!closed) { try {controller.enqueue(encoder.encode(JSON.stringify({kind:'error',...body})+'\n'));} catch {} } }
-        finally {closed = true; files = undefined; try {controller.close();} catch {}}
+        finally {closed = true; cleanup(); try {controller.close();} catch {}}
       },
-      cancel() { abort.abort(); files = undefined; },
+      cancel() { abort.abort(); cleanup(); },
     });
     return new Response(stream, {headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
   }
   try { return Response.json(await run(() => {}), {headers:{'Cache-Control':'no-store'}}); }
   catch(error) {abort.abort(); return fail(error);}
-  finally {files = undefined;}
+  finally {cleanup();}
 }

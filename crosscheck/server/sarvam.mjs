@@ -5,10 +5,10 @@ export class ApiError extends Error {
   constructor(message, status = 500, code = 'processing_failed') { super(message); this.status = status; this.code = code; }
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-export function createSarvam(key, { fetchImpl = fetch, sleepImpl = sleep, timeoutMs = 30000 } = {}) {
+export function createSarvam(key, { fetchImpl = fetch, sleepImpl = sleep, timeoutMs = 20000 } = {}) {
   async function request(path, bodyFactory, isJson = false, signal) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (signal?.aborted) throw new ApiError('Comparison cancelled.', 499, 'cancelled');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (signal?.aborted) throw signal.reason instanceof ApiError ? signal.reason : new ApiError('Comparison cancelled.', 499, 'cancelled');
       let response;
       try {
         response = await fetchImpl(`https://api.sarvam.ai${path}`, {
@@ -16,14 +16,15 @@ export function createSarvam(key, { fetchImpl = fetch, sleepImpl = sleep, timeou
           body: bodyFactory(), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
       } catch (error) {
-        if (signal?.aborted) throw new ApiError('Comparison cancelled.', 499, 'cancelled');
-        if (attempt < 2) { await sleepImpl(500 * 2 ** attempt); continue; }
+        if (signal?.aborted) throw signal.reason instanceof ApiError ? signal.reason : new ApiError('Comparison cancelled.', 499, 'cancelled');
+        // A timed-out generation may still be running upstream. Do not queue more.
+        if (error?.name !== 'TimeoutError' && error?.name !== 'AbortError' && attempt < 1) { await sleepImpl(500 * 2 ** attempt); continue; }
         throw new ApiError('Sarvam did not respond in time. Please try again.', 504, 'upstream_timeout');
       }
       if (response.ok) {
         try { return await response.json(); } catch { throw new ApiError('Sarvam returned an unreadable response. Please retry.', 502, 'invalid_upstream'); }
       }
-      if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+      if ((response.status === 429 || response.status >= 500) && attempt < 1) {
         await response.arrayBuffer().catch(() => {});
         const retry = Number(response.headers.get('retry-after'));
         await sleepImpl(Math.min(5000, retry > 0 ? retry * 1000 : 500 * 2 ** attempt)); continue;
@@ -56,8 +57,10 @@ export function createSarvam(key, { fetchImpl = fetch, sleepImpl = sleep, timeou
     const payload = JSON.stringify({ reference_date: referenceDate, topic, statement_a: a, statement_b: b });
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await request('/v1/chat/completions', () => JSON.stringify({
-        model: 'sarvam-105b', temperature: 0.2, reasoning_effort: 'medium', max_tokens: 6000,
-        messages: [ { role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: payload },
+        model: 'sarvam-105b', temperature: 0.2, reasoning_effort: null, max_tokens: 4000,
+        // The constrained decoder enforces the schema but does not teach its fields
+        // to the model. Include it in the prompt to avoid whitespace-only loops.
+        messages: [ { role: 'system', content: SYSTEM_PROMPT + '\nRequired output JSON Schema:\n' + JSON.stringify(jsonSchema) }, { role: 'user', content: payload },
           ...(attempt ? [{ role: 'user', content: 'Your prior output failed validation. Return only complete JSON matching the schema. Quote exact spans from the original transcripts.' }] : []) ],
         response_format: { type: 'json_schema', json_schema: { name: 'crosscheck_result', strict: true, schema: jsonSchema } },
       }), true, signal);
