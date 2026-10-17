@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+.dev.vars*
+.tools/
+__pycache__/
+*.tsbuildinfo
